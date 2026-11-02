@@ -1,4 +1,5 @@
 package task;
 
-public class Task {
+public interface Task {
+    public void execute();
 }
