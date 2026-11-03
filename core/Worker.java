@@ -15,8 +15,10 @@ final class Worker extends Thread {
         super(name); this.queue = queue; this.metrics = metrics; this.deadLetters = deadLetters;
     }
     @Override public void run() {
+        metrics.registerWorker(getName());
         System.out.println("[" + getName() + "] Started");
         while (!isInterrupted()) {
+            metrics.workerIdle(getName());
             TaskEnvelope envelope = queue.take();
             if (envelope == null) break;
             TaskHandle handle = envelope.getHandle();
@@ -25,6 +27,7 @@ final class Worker extends Thread {
                 continue;
             }
             metrics.recordStarted();
+            metrics.workerBusy(getName(), handle.getId());
             try {
                 Throwable finalFailure = null;
                 int retry = 0;
@@ -43,6 +46,7 @@ final class Worker extends Thread {
                         if (retry >= envelope.getRetryPolicy().getMaxRetries() || handle.isCancellationRequested()) break;
                         retry++;
                         long delay = envelope.getRetryPolicy().backoffMillisForRetry(retry);
+                        metrics.recordRetry(handle.getId(), getName(), retry, delay);
                         System.out.println("[" + getName() + "] Retry " + retry + "/" + envelope.getRetryPolicy().getMaxRetries() + " for " + handle.getId() + " after " + delay + " ms");
                         if (!handle.prepareRetry()) { finalFailure = null; break; }
                         try { Thread.sleep(delay); }
@@ -57,10 +61,14 @@ final class Worker extends Thread {
                         metrics.recordFailure(handle.getId(), getName(), finalFailure, handle.getExecutionNanos(), handle.getQueueWaitNanos());
                     } else metrics.recordCancelled();
                 } else if (handle.getStatus() == TaskStatus.SUCCEEDED) {
-                    metrics.recordSuccess(handle.getExecutionNanos(), handle.getQueueWaitNanos());
+                    metrics.recordSuccess(handle.getId(), getName(), handle.getExecutionNanos(), handle.getQueueWaitNanos());
                 } else if (handle.getStatus() == TaskStatus.CANCELLED) metrics.recordCancelled();
-            } finally { metrics.recordFinished(); }
+            } finally {
+                metrics.recordFinished();
+                metrics.workerTaskFinished(getName(), handle.getId());
+            }
         }
+        metrics.workerStopped(getName());
         System.out.println("[" + getName() + "] Stopped");
     }
 }
