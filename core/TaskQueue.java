@@ -1,29 +1,22 @@
 package core;
 
-import task.Task;
 import java.util.ArrayDeque;
+import java.util.Objects;
 import java.util.Queue;
 
-public class TaskQueue {
-    private final Queue<Task> tasks;
+/** Thread-safe FIFO queue. Workers drain accepted tasks after shutdown. */
+public final class TaskQueue {
+    private final Queue<TaskEnvelope> tasks = new ArrayDeque<>();
     private boolean shutdown;
 
-    public TaskQueue() {
-        tasks = new ArrayDeque<>();
-        shutdown = false;
-    }
-
-    public synchronized void submit(Task task) {
-        if (shutdown) {
-            throw new IllegalStateException("Cannot submit tasks after shutdown");
-        }
-
+    public synchronized void submit(TaskEnvelope task) {
+        Objects.requireNonNull(task);
+        if (shutdown) throw new IllegalStateException("Task queue is shut down");
         tasks.add(task);
-        System.out.println("[Queue] Task submitted");
         notifyAll();
     }
 
-    public synchronized Task take() {
+    public synchronized TaskEnvelope take() {
         while (tasks.isEmpty() && !shutdown) {
             try {
                 wait();
@@ -32,12 +25,7 @@ public class TaskQueue {
                 return null;
             }
         }
-
-        if (tasks.isEmpty()) {
-            return null;
-        }
-
-        return tasks.remove();
+        return tasks.poll();
     }
 
     public synchronized void shutdown() {
@@ -45,7 +33,6 @@ public class TaskQueue {
         notifyAll();
     }
 
-    public synchronized int size() {
-        return tasks.size();
-    }
+    public synchronized int size() { return tasks.size(); }
+    public synchronized boolean isShutdown() { return shutdown; }
 }

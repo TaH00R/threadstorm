@@ -1,14 +1,14 @@
 package core;
 
-import task.Task;
 import metrics.MetricsCollector;
-import metrics.ExceptionReport;
+import task.TaskContext;
+import task.TaskHandle;
 
-public class Worker extends Thread {
+final class Worker extends Thread {
     private final TaskQueue queue;
     private final MetricsCollector metrics;
 
-    public Worker(String name, TaskQueue queue, MetricsCollector metrics) {
+    Worker(String name, TaskQueue queue, MetricsCollector metrics) {
         super(name);
         this.queue = queue;
         this.metrics = metrics;
@@ -17,24 +17,40 @@ public class Worker extends Thread {
     @Override
     public void run() {
         System.out.println("[" + getName() + "] Started");
-
         while (!isInterrupted()) {
-            Task task = queue.take();
-            if (task == null) break;
-            long start = System.nanoTime();
+            TaskEnvelope envelope = queue.take();
+            if (envelope == null) break;
 
+            TaskHandle handle = envelope.getHandle();
+            if (!handle.tryStart(getName())) {
+                if (handle.getStatus() == task.TaskStatus.CANCELLED) metrics.recordCancelled();
+                continue;
+            }
+
+            metrics.recordStarted();
             try {
-                task.execute();
-                long duration = (System.nanoTime() - start) / 1_000_000;
-                metrics.recordSuccess(duration);
-
-            } catch (RuntimeException e) {
-                long duration = (System.nanoTime() - start) / 1_000_000;
-                ExceptionReport report = new ExceptionReport(getName(), e.getMessage(), duration);
-                metrics.recordFailure(report);
+                envelope.getTask().execute(
+                    new TaskContext(handle.getId(), getName(), handle)
+                );
+                handle.markSucceeded();
+                if (handle.getStatus() == task.TaskStatus.SUCCEEDED) {
+                    metrics.recordSuccess(handle.getExecutionNanos(), handle.getQueueWaitNanos());
+                } else {
+                    metrics.recordCancelled();
+                }
+            } catch (Exception failure) {
+                handle.markFailed(failure);
+                if (handle.getStatus() == task.TaskStatus.FAILED) {
+                    metrics.recordFailure(handle.getId(), getName(), failure,
+                        handle.getExecutionNanos(), handle.getQueueWaitNanos());
+                } else {
+                    metrics.recordCancelled();
+                }
+                // Keep the worker alive after task-level failures.
+            } finally {
+                metrics.recordFinished();
             }
         }
-
         System.out.println("[" + getName() + "] Stopped");
     }
 }

@@ -1,21 +1,30 @@
 package metrics;
 
-public class ExceptionReport {
+import java.time.Instant;
+
+public final class ExceptionReport {
+    private final String taskId;
     private final String workerName;
     private final String errorMessage;
-    private final long executionTime;
+    private final long executionNanos;
+    private final Instant occurredAt;
 
-    public ExceptionReport(
-            String workerName,
-            String errorMessage,
-            long executionTime) {
-
+    public ExceptionReport(String taskId, String workerName, Throwable failure, long executionNanos) {
+        this.taskId = taskId;
         this.workerName = workerName;
-        this.errorMessage = errorMessage;
-        this.executionTime = executionTime;
+        this.errorMessage = failure.getClass().getSimpleName() + ": " + failure.getMessage();
+        this.executionNanos = executionNanos;
+        this.occurredAt = Instant.now();
     }
 
+    public String getTaskId() { return taskId; }
+    public String getWorkerName() { return workerName; }
+    public String getErrorMessage() { return errorMessage; }
+    public long getExecutionNanos() { return executionNanos; }
+    public Instant getOccurredAt() { return occurredAt; }
+
     public void display() {
-        System.out.println("[FAILURE] " + workerName + " | " + errorMessage + " | " + executionTime + "ms");
+        System.out.printf("[FAILURE] %s | %s | %s | %.3f ms%n",
+            taskId, workerName, errorMessage, executionNanos / 1_000_000.0);
     }
 }

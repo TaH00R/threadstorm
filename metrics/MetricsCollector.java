@@ -1,54 +1,76 @@
 package metrics;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
-public class MetricsCollector {
-    private int completedTasks;
-    private int failedTasks;
-    private long totalExecutionTime;
-    private final List<ExceptionReport> failures;
+/** Thread-safe aggregate metrics for one ThreadStorm instance. */
+public final class MetricsCollector {
+    private long submitted;
+    private long started;
+    private long completed;
+    private long failed;
+    private long cancelled;
+    private long totalExecutionNanos;
+    private long totalQueueWaitNanos;
+    private long currentlyRunning;
+    private final List<ExceptionReport> failures = new ArrayList<>();
 
-    public MetricsCollector() {
-        completedTasks = 0;
-        failedTasks = 0;
-        totalExecutionTime = 0;
+    public synchronized void recordSubmitted() { submitted++; }
+    public synchronized void recordStarted() { started++; currentlyRunning++; }
+    public synchronized void recordFinished() { if (currentlyRunning > 0) currentlyRunning--; }
 
-        failures = new ArrayList<>();
-    }
-
-    public synchronized void recordSuccess(long time) {
-        completedTasks++;
-        totalExecutionTime += time;
+    public synchronized void recordSuccess(long executionNanos, long queueWaitNanos) {
+        completed++;
+        totalExecutionNanos += executionNanos;
+        totalQueueWaitNanos += queueWaitNanos;
     }
 
     public synchronized void recordFailure(ExceptionReport report) {
-        failedTasks++;
+        failed++;
         failures.add(report);
+        totalExecutionNanos += report.getExecutionNanos();
+    }
+
+    public synchronized void recordCancelled() { cancelled++; }
+
+    public synchronized void recordFailure(String taskId, String workerName, Throwable failure,
+                                            long executionNanos, long queueWaitNanos) {
+        failed++;
+        failures.add(new ExceptionReport(taskId, workerName, failure, executionNanos));
+        totalExecutionNanos += executionNanos;
+        totalQueueWaitNanos += queueWaitNanos;
+    }
+
+    public synchronized long getSubmitted() { return submitted; }
+    public synchronized long getStarted() { return started; }
+    public synchronized long getCompleted() { return completed; }
+    public synchronized long getFailed() { return failed; }
+    public synchronized long getCancelled() { return cancelled; }
+    public synchronized long getCurrentlyRunning() { return currentlyRunning; }
+    public synchronized long getPending() { return Math.max(0, submitted - completed - failed - cancelled - currentlyRunning); }
+    public synchronized List<ExceptionReport> getFailures() {
+        return Collections.unmodifiableList(new ArrayList<>(failures));
     }
 
     public synchronized void displayReport() {
-        int total = completedTasks + failedTasks;
+        double avgExecutionMs = (completed + failed) == 0 ? 0.0
+            : totalExecutionNanos / (double) (completed + failed) / 1_000_000.0;
+        double avgQueueWaitMs = (completed + failed) == 0 ? 0.0
+            : totalQueueWaitNanos / (double) (completed + failed) / 1_000_000.0;
 
         System.out.println("\n========== THREADSTORM REPORT ==========");
-
-        System.out.println("Total Tasks: " + total);
-        System.out.println("Completed: " + completedTasks);
-        System.out.println("Failed: " + failedTasks);
-
-        double average = completedTasks == 0 ? 0 : (double) totalExecutionTime / completedTasks;
-
-        System.out.println("Average Successful Execution Time: "  + average + " ms");
-        System.out.println("\nFailure Details:");
-
-        if (failures.isEmpty()) {
-            System.out.println("No failures!");
-        } else {
-            for (ExceptionReport report : failures) {
-                report.display();
-            }
-        }
-
-        System.out.println("========================================");
+        System.out.println("Submitted:       " + submitted);
+        System.out.println("Started:         " + started);
+        System.out.println("Completed:       " + completed);
+        System.out.println("Failed:          " + failed);
+        System.out.println("Cancelled:       " + cancelled);
+        System.out.println("Currently active:" + currentlyRunning);
+        System.out.printf("Avg execution:   %.3f ms%n", avgExecutionMs);
+        System.out.printf("Avg queue wait:  %.3f ms%n", avgQueueWaitMs);
+        System.out.println("----------------------------------------");
+        if (failures.isEmpty()) System.out.println("No recorded failures.");
+        else for (ExceptionReport report : failures) report.display();
+        System.out.println("========================================\n");
     }
 }

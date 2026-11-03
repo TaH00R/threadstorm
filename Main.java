@@ -1,28 +1,33 @@
 import core.ThreadStorm;
+import metrics.MetricsCollector;
 import task.ComputationTask;
 import task.SimulationTask;
+import task.TaskHandle;
 
 public class Main {
-
     public static void main(String[] args) {
         ThreadStorm engine = new ThreadStorm(4);
-
         engine.start();
 
-        engine.submit(new ComputationTask(5));
-        engine.submit(new ComputationTask(10));
-        engine.submit(new ComputationTask(15));
+        TaskHandle factorial = engine.submit(new ComputationTask(100));
+        engine.submit(new ComputationTask(250));
+        engine.submit(new SimulationTask("Email Processing", 1200));
+        engine.submit(new SimulationTask("File Upload", 1800));
+        engine.submit(new SimulationTask("Database Backup", 900));
 
-        engine.submit(new SimulationTask("Email Processing", 2000));
-        engine.submit(new SimulationTask("File Upload", 3000));
-        engine.submit(new SimulationTask("Database Backup", 1500));
+        TaskHandle failing = engine.submit(context -> {
+            throw new IllegalStateException("Simulated task failure");
+        });
 
+        engine.submit(new SimulationTask("Report Generation", 1500));
 
-        engine.submit(() -> {throw new RuntimeException("Simulated task failure");});
-
-        engine.submit(new SimulationTask("Report Generation", 2500));
-        engine.submit(new ComputationTask(20));
-
+        System.out.println("Submitted handles: " + factorial.getId() + ", " + failing.getId());
         engine.shutdown();
+
+        System.out.println("Final engine state: " + engine.getState());
+        MetricsCollector metrics = engine.getMetrics();
+        System.out.printf("Accounting check: submitted=%d, terminal=%d%n",
+            metrics.getSubmitted(),
+            metrics.getCompleted() + metrics.getFailed() + metrics.getCancelled());
     }
 }
