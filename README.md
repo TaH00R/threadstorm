@@ -1,19 +1,17 @@
-# ThreadStorm 0.3.0
+# ThreadStorm 0.4.0
 
 **Concurrency. Control. Observability.**
 
-ThreadStorm is a small Java task execution engine built around a custom worker pool and a bounded FIFO task queue.
+ThreadStorm is an educational Java task execution engine built around a custom worker pool, bounded queue, and priority scheduler.
 
-## What's new in 0.3.0
+## What's new in 0.4.0
 
-- Configurable bounded queue capacity.
-- `BLOCK`: wait until a queue slot becomes free.
-- `REJECT`: fail immediately when the queue is full.
-- `TIMEOUT`: wait for a configured duration, then reject.
-- Producers are notified when workers remove tasks.
-- Shutdown wakes blocked producers and consumers.
-- In-flight submissions are coordinated with shutdown so the queue is not closed while an already-admitted submit call is still trying to enqueue.
-- Existing task lifecycle, cooperative cancellation, graceful draining and basic metrics retained.
+- Four priorities: `CRITICAL`, `HIGH`, `NORMAL`, `LOW`.
+- Highest effective priority is selected when a worker takes its next task.
+- FIFO ordering is preserved among tasks with the same effective priority.
+- Starvation prevention through priority aging: every configured aging interval, a waiting task is promoted by one priority level, up to `CRITICAL`.
+- Existing bounded-queue backpressure policies (`BLOCK`, `REJECT`, `TIMEOUT`) are retained.
+- Existing lifecycle, cancellation, graceful shutdown and metrics are retained.
 
 ## Requirements
 
@@ -22,13 +20,14 @@ ThreadStorm is a small Java task execution engine built around a custom worker p
 
 ## Project structure
 
-The package directories are intentionally at the project root; there is no `src/` directory.
+Package directories are intentionally at the project root; there is no `src/` directory.
 
 ```text
 threadstorm/
 ├── core/
 ├── metrics/
 ├── task/
+├── tests/
 ├── Main.java
 ├── README.md
 └── .gitignore
@@ -50,71 +49,65 @@ javac -d out Main.java core/*.java task/*.java metrics/*.java
 java -cp out Main
 ```
 
-## Stress test
+## Priority scheduling test
 
-A dependency-free stress test submits 1,000 tasks from four producer threads and invokes shutdown concurrently from two threads.
+Compile and run after compiling the application classes:
 
 ```powershell
-javac -cp out -d out tests\\ThreadStormStressTest.java
-java -cp out ThreadStormStressTest
+javac -cp out -d out tests\PrioritySchedulingTest.java
+java -cp out tests.PrioritySchedulingTest
 ```
 
 Expected final line:
 
 ```text
-STRESS PASS: 1000 tasks; concurrent shutdown completed.
+PRIORITY PASS: priority order and FIFO tie-breaking verified.
 ```
 
 ## API examples
 
 ```java
-ThreadStorm engine = new ThreadStorm(4, 20);
+ThreadStorm engine = new ThreadStorm(4, 100);
 engine.start();
 
-// Default policy is BLOCK.
-TaskHandle first = engine.submit(context -> {
-    context.throwIfCancellationRequested();
-    System.out.println("Hello from " + context.getWorkerName());
-});
-
-// Reject immediately if the queue is full.
-engine.submit(task, SubmissionPolicy.REJECT);
-
-// Wait up to 500 milliseconds for queue capacity.
-engine.submit(task, SubmissionPolicy.TIMEOUT, 500, TimeUnit.MILLISECONDS);
-
+engine.submit(task); // NORMAL priority, BLOCK policy
+engine.submit(task, Priority.CRITICAL);
+engine.submit(task, Priority.HIGH, SubmissionPolicy.REJECT, 0, TimeUnit.NANOSECONDS);
 engine.shutdown();
 ```
 
-`submit` methods throw `InterruptedException`. If a submitting thread is interrupted while waiting for capacity, the task is not accepted and the interruption propagates to the caller.
+The full overload accepts `(task, priority, submissionPolicy, timeout, timeUnit)`. Existing overloads remain source-compatible and default to `NORMAL`.
+
+## Scheduling and starvation prevention
+
+The queue is bounded and protected by its intrinsic monitor. Each accepted task receives a monotonically increasing enqueue sequence while holding the queue lock. On each `take()`, the queue scans the waiting tasks and chooses:
+
+1. The task with the best effective priority.
+2. For equal effective priorities, the task with the smallest enqueue sequence (FIFO).
+
+Priority aging improves a task's effective priority by one level for every configured interval it remains queued. The default aging interval is five seconds. This means a continuously waiting `LOW` task can eventually reach `CRITICAL` effective priority, preventing indefinite starvation under sustained higher-priority arrivals.
+
+The default constructor uses five seconds. For experiments, the queue also supports a configurable aging interval through `TaskQueue(int capacity, long agingInterval, TimeUnit unit)`.
+
+The queue scans its bounded list when dequeuing, giving O(n) selection. This is a deliberate, simple trade-off for a bounded educational queue; a future optimization can use multiple priority queues plus an aging strategy.
 
 ## Backpressure model
 
-The queue is protected by its intrinsic monitor:
-
-- Producers wait while `tasks.size() >= capacity`.
-- Consumers wait while the queue is empty.
-- `wait()` releases the queue monitor while a thread is waiting.
-- A worker calls `notifyAll()` after removing an item, waking producers.
-- A producer calls `notifyAll()` after adding an item, waking consumers.
-- All waits are inside `while` loops because wakeups do not guarantee that the condition is still true.
-
-## Important behaviour
-
+- `BLOCK`: wait until a queue slot becomes available.
+- `REJECT`: reject immediately when full.
+- `TIMEOUT`: wait for the specified duration, then reject.
 - Queue capacity limits waiting tasks, not tasks currently executing.
-- `BLOCK` is the default submission policy.
-- `REJECT` and expired `TIMEOUT` submissions throw `TaskRejectedException`.
-- `shutdown()` stops new submissions, waits for in-flight submissions to finish admission, closes the queue, then drains accepted tasks.
-- Cancellation is cooperative for running tasks. A task must check `TaskContext` to respond promptly.
-- A task that ignores interruption/cancellation can delay graceful shutdown.
+- All monitor waits are in `while` loops to handle spurious wakeups and competing producers/consumers.
 
-## Current limitations
+## Important behaviour and limitations
 
-- FIFO only; priority scheduling is not implemented yet.
-- No automatic retry or dead-letter queue yet.
-- Metrics are aggregate counters and averages; percentile latency metrics are not implemented.
-- This is an educational single-process engine, not a replacement for `ExecutorService`.
+- Priority only affects tasks that are still queued; it cannot preempt a task already running.
+- FIFO is guaranteed within the same effective priority at the moment a worker selects a task. Aging can change effective priority over time.
+- Aging is evaluated when a worker dequeues; no background scheduler is required.
+- Cancellation remains cooperative for running tasks.
+- No retries/dead-letter queue or percentile metrics yet.
+- This is an educational single-process engine, not a replacement for Java's `ExecutorService`.
 
 ## Next milestone
 
-0.4.0: priority scheduling and starvation prevention.
+0.5.0: fault tolerance — retries, exponential backoff, task timeouts, and a dead-letter queue.

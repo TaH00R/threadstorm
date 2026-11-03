@@ -1,5 +1,3 @@
-package tests;
-
 import core.ThreadStorm;
 import task.TaskStatus;
 import java.util.concurrent.atomic.AtomicInteger;

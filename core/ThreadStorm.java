@@ -41,16 +41,26 @@ public final class ThreadStorm {
 
     /** Default submission policy is BLOCK: wait until queue capacity is available. */
     public TaskHandle submit(Task task) throws InterruptedException {
-        return submit(task, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS);
+        return submit(task, Priority.NORMAL, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS);
+    }
+
+    public TaskHandle submit(Task task, Priority priority) throws InterruptedException {
+        return submit(task, priority, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS);
     }
 
     public TaskHandle submit(Task task, SubmissionPolicy policy) throws InterruptedException {
-        return submit(task, policy, 0, TimeUnit.NANOSECONDS);
+        return submit(task, Priority.NORMAL, policy, 0, TimeUnit.NANOSECONDS);
     }
 
     public TaskHandle submit(Task task, SubmissionPolicy policy, long timeout, TimeUnit unit)
             throws InterruptedException {
+        return submit(task, Priority.NORMAL, policy, timeout, unit);
+    }
+
+    public TaskHandle submit(Task task, Priority priority, SubmissionPolicy policy, long timeout, TimeUnit unit)
+            throws InterruptedException {
         Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(priority, "priority");
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(unit, "unit");
 
@@ -64,7 +74,7 @@ public final class ThreadStorm {
         TaskHandle handle = new TaskHandle(String.format("TASK-%06d", taskSequence.incrementAndGet()));
         boolean accepted = false;
         try {
-            queue.submit(new TaskEnvelope(task, handle), policy, timeout, unit);
+            queue.submit(new TaskEnvelope(task, handle, priority), policy, timeout, unit);
             accepted = true;
             metrics.recordSubmitted();
             return handle;
@@ -136,5 +146,6 @@ public final class ThreadStorm {
     public EngineState getState() { return state; }
     public int getQueueSize() { return queue.size(); }
     public int getQueueCapacity() { return queue.getCapacity(); }
+    public long getQueueAgingIntervalNanos() { return queue.getAgingIntervalNanos(); }
     public MetricsCollector getMetrics() { return metrics; }
 }
