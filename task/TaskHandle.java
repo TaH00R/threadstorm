@@ -18,6 +18,7 @@ public final class TaskHandle {
     private volatile long completedNanos;
     private volatile Throwable failure;
     private volatile String workerName;
+    private volatile int attempts;
 
     public TaskHandle(String id) { this.id = Objects.requireNonNull(id); }
 
@@ -28,6 +29,7 @@ public final class TaskHandle {
     public Instant getCompletedAt() { return completedAt; }
     public Throwable getFailure() { return failure; }
     public String getWorkerName() { return workerName; }
+    public int getAttempts() { return attempts; }
     public boolean isCancellationRequested() { return cancellationRequested.get(); }
     public boolean isDone() { return getStatus().isTerminal(); }
 
@@ -66,6 +68,7 @@ public final class TaskHandle {
         }
         if (!status.compareAndSet(TaskStatus.QUEUED, TaskStatus.RUNNING)) return false;
         this.workerName = workerName;
+        attempts++;
         this.startedAt = Instant.now();
         this.startedNanos = System.nanoTime();
         // Close the race where cancellation arrives between the initial check and RUNNING.
@@ -74,6 +77,14 @@ public final class TaskHandle {
             return false;
         }
         return true;
+    }
+
+    /** Re-queue the same logical task after a failed attempt. */
+    public boolean prepareRetry() {
+        if (cancellationRequested.get()) { markCancelled(); return false; }
+        boolean changed = status.compareAndSet(TaskStatus.RUNNING, TaskStatus.QUEUED);
+        if (changed) { startedAt = null; startedNanos = 0; completedAt = null; completedNanos = 0; failure = null; }
+        return changed;
     }
 
     public void markSucceeded() {

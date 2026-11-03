@@ -13,6 +13,7 @@ public final class ThreadStorm {
     private final Object lifecycleLock = new Object();
     private final TaskQueue queue;
     private final MetricsCollector metrics = new MetricsCollector();
+    private final DeadLetterQueue deadLetters = new DeadLetterQueue();
     private final WorkerPool workerPool;
     private final AtomicLong taskSequence = new AtomicLong();
     private volatile EngineState state = EngineState.CREATED;
@@ -21,7 +22,7 @@ public final class ThreadStorm {
     public ThreadStorm(int workerCount, int queueCapacity) {
         if (workerCount <= 0) throw new IllegalArgumentException("Worker count must be positive");
         this.queue = new TaskQueue(queueCapacity);
-        this.workerPool = new WorkerPool(workerCount, queue, metrics);
+        this.workerPool = new WorkerPool(workerCount, queue, metrics, deadLetters);
     }
 
     /** Convenience constructor: a queue capacity of 100 is used. */
@@ -48,6 +49,15 @@ public final class ThreadStorm {
         return submit(task, priority, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS);
     }
 
+    /** Submit with retry and cooperative execution-timeout configuration. */
+    public TaskHandle submit(Task task, Priority priority, RetryPolicy retryPolicy, long timeout, TimeUnit unit) throws InterruptedException {
+        Objects.requireNonNull(retryPolicy, "retryPolicy");
+        Objects.requireNonNull(unit, "unit");
+        if (timeout < 0) throw new IllegalArgumentException("timeout cannot be negative");
+        return submitConfigured(task, priority, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS, retryPolicy, unit.toMillis(timeout));
+    }
+
+
     public TaskHandle submit(Task task, SubmissionPolicy policy) throws InterruptedException {
         return submit(task, Priority.NORMAL, policy, 0, TimeUnit.NANOSECONDS);
     }
@@ -64,29 +74,7 @@ public final class ThreadStorm {
         Objects.requireNonNull(policy, "policy");
         Objects.requireNonNull(unit, "unit");
 
-        synchronized (lifecycleLock) {
-            if (state != EngineState.RUNNING) {
-                throw new IllegalStateException("Engine is not accepting tasks; state=" + state);
-            }
-            activeSubmitters++;
-        }
-
-        TaskHandle handle = new TaskHandle(String.format("TASK-%06d", taskSequence.incrementAndGet()));
-        boolean accepted = false;
-        try {
-            queue.submit(new TaskEnvelope(task, handle, priority), policy, timeout, unit);
-            accepted = true;
-            metrics.recordSubmitted();
-            return handle;
-        } finally {
-            synchronized (lifecycleLock) {
-                if (accepted) {
-                    // Metrics are recorded before this decrement, so shutdown cannot report early.
-                }
-                activeSubmitters--;
-                lifecycleLock.notifyAll();
-            }
-        }
+        return submitConfigured(task, priority, policy, timeout, unit, RetryPolicy.NONE, 0);
     }
 
     /**
@@ -143,6 +131,25 @@ public final class ThreadStorm {
         if (interrupted) Thread.currentThread().interrupt();
     }
 
+
+    private TaskHandle submitConfigured(Task task, Priority priority, SubmissionPolicy policy, long timeout, TimeUnit unit, RetryPolicy retryPolicy, long executionTimeoutMillis) throws InterruptedException {
+        Objects.requireNonNull(task, "task"); Objects.requireNonNull(priority, "priority");
+        Objects.requireNonNull(policy, "policy"); Objects.requireNonNull(unit, "unit");
+        synchronized (lifecycleLock) {
+            if (state != EngineState.RUNNING) throw new IllegalStateException("Engine is not accepting tasks; state=" + state);
+            activeSubmitters++;
+        }
+        TaskHandle handle = new TaskHandle(String.format("TASK-%06d", taskSequence.incrementAndGet()));
+        try {
+            queue.submit(new TaskEnvelope(task, handle, priority, retryPolicy, executionTimeoutMillis), policy, timeout, unit);
+            metrics.recordSubmitted();
+            return handle;
+        } finally {
+            synchronized (lifecycleLock) { activeSubmitters--; lifecycleLock.notifyAll(); }
+        }
+    }
+
+    public DeadLetterQueue getDeadLetterQueue() { return deadLetters; }
     public EngineState getState() { return state; }
     public int getQueueSize() { return queue.size(); }
     public int getQueueCapacity() { return queue.getCapacity(); }

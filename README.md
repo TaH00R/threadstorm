@@ -1,113 +1,88 @@
-# ThreadStorm 0.4.0
+# ThreadStorm 0.5.0
 
 **Concurrency. Control. Observability.**
 
-ThreadStorm is an educational Java task execution engine built around a custom worker pool, bounded queue, and priority scheduler.
+ThreadStorm is a small Java task-execution engine built to explore worker pools, monitor-based queues, scheduling, task lifecycle management and fault tolerance.
 
-## What's new in 0.4.0
+## What's new in 0.5.0
 
-- Four priorities: `CRITICAL`, `HIGH`, `NORMAL`, `LOW`.
-- Highest effective priority is selected when a worker takes its next task.
-- FIFO ordering is preserved among tasks with the same effective priority.
-- Starvation prevention through priority aging: every configured aging interval, a waiting task is promoted by one priority level, up to `CRITICAL`.
-- Existing bounded-queue backpressure policies (`BLOCK`, `REJECT`, `TIMEOUT`) are retained.
-- Existing lifecycle, cancellation, graceful shutdown and metrics are retained.
+- Configurable retry policies with exponential backoff.
+- An in-memory dead-letter queue for tasks that exhaust their retry budget.
+- Cooperative execution timeouts through `TaskContext.checkpoint()` / `throwIfTimedOut()`.
+- Attempt counts exposed through `TaskHandle.getAttempts()`.
+- Existing bounded queue, BLOCK/REJECT/TIMEOUT admission policies, priority scheduling with aging, cancellation and graceful shutdown remain available.
 
-## Requirements
+## Important timeout semantics
 
-- Java 17+
-- No external dependencies.
+Java cannot safely force-stop an arbitrary task thread. ThreadStorm therefore uses **cooperative timeouts**: tasks must periodically call `context.checkpoint()` (or `throwIfTimedOut()`) during long-running work. A final checkpoint is also performed when `execute` returns. A task blocked forever in code that never checks its context cannot be forcibly timed out by this version.
 
-## Project structure
+Retries run on the same worker thread after the configured backoff. This deliberately avoids re-enqueueing retries into a bounded queue, which could deadlock if all workers blocked trying to reinsert retries into a full queue. The trade-off is that a worker is occupied during backoff and a retried task retains its original scheduling slot.
 
-Package directories are intentionally at the project root; there is no `src/` directory.
+## Project layout
 
 ```text
-threadstorm/
+threadstorm-0.5.0/
 ├── core/
+│   ├── DeadLetterEntry.java
+│   ├── DeadLetterQueue.java
+│   ├── EngineState.java
+│   ├── Priority.java
+│   ├── RetryPolicy.java
+│   ├── SubmissionPolicy.java
+│   ├── TaskEnvelope.java
+│   ├── TaskQueue.java
+│   ├── TaskRejectedException.java
+│   ├── ThreadStorm.java
+│   ├── Worker.java
+│   └── WorkerPool.java
 ├── metrics/
 ├── task/
 ├── tests/
 ├── Main.java
-├── README.md
-└── .gitignore
+└── README.md
 ```
 
-## Compile and run
+## Build and run (Java 17+)
 
-### Windows PowerShell
+Run these commands from the project root in PowerShell:
 
 ```powershell
-javac -d out Main.java core\*.java task\*.java metrics\*.java
+javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java
 java -cp out Main
 ```
 
-### Linux / macOS
-
-```bash
-javac -d out Main.java core/*.java task/*.java metrics/*.java
-java -cp out Main
-```
-
-## Priority scheduling test
-
-Compile and run after compiling the application classes:
+Run the fault-tolerance test:
 
 ```powershell
-javac -cp out -d out tests\PrioritySchedulingTest.java
+javac -cp out -d out tests\FaultToleranceTest.java
+java -cp out tests.FaultToleranceTest
+```
+
+Run the existing scheduling and stress tests:
+
+```powershell
+javac -cp out -d out tests\PrioritySchedulingTest.java tests\ThreadStormStressTest.java
 java -cp out tests.PrioritySchedulingTest
+java -cp out tests.ThreadStormStressTest
 ```
 
-Expected final line:
-
-```text
-PRIORITY PASS: priority order and FIFO tie-breaking verified.
-```
-
-## API examples
+## Using retries and timeouts
 
 ```java
-ThreadStorm engine = new ThreadStorm(4, 100);
-engine.start();
-
-engine.submit(task); // NORMAL priority, BLOCK policy
-engine.submit(task, Priority.CRITICAL);
-engine.submit(task, Priority.HIGH, SubmissionPolicy.REJECT, 0, TimeUnit.NANOSECONDS);
-engine.shutdown();
+RetryPolicy retry = new RetryPolicy(3, 100, 2.0); // 3 retries, 100ms initial backoff, x2
+TaskHandle handle = engine.submit(context -> {
+    context.checkpoint();
+    // perform a unit of work
+    context.checkpoint();
+}, Priority.HIGH, retry, 2, TimeUnit.SECONDS);
 ```
 
-The full overload accepts `(task, priority, submissionPolicy, timeout, timeUnit)`. Existing overloads remain source-compatible and default to `NORMAL`.
+`maxRetries` excludes the initial attempt. A value of `3` permits up to four total attempts. A timeout value of `0` disables the timeout. Dead-letter entries are available through `engine.getDeadLetterQueue().getEntries()`.
 
-## Scheduling and starvation prevention
+## Design boundaries
 
-The queue is bounded and protected by its intrinsic monitor. Each accepted task receives a monotonically increasing enqueue sequence while holding the queue lock. On each `take()`, the queue scans the waiting tasks and chooses:
-
-1. The task with the best effective priority.
-2. For equal effective priorities, the task with the smallest enqueue sequence (FIFO).
-
-Priority aging improves a task's effective priority by one level for every configured interval it remains queued. The default aging interval is five seconds. This means a continuously waiting `LOW` task can eventually reach `CRITICAL` effective priority, preventing indefinite starvation under sustained higher-priority arrivals.
-
-The default constructor uses five seconds. For experiments, the queue also supports a configurable aging interval through `TaskQueue(int capacity, long agingInterval, TimeUnit unit)`.
-
-The queue scans its bounded list when dequeuing, giving O(n) selection. This is a deliberate, simple trade-off for a bounded educational queue; a future optimization can use multiple priority queues plus an aging strategy.
-
-## Backpressure model
-
-- `BLOCK`: wait until a queue slot becomes available.
-- `REJECT`: reject immediately when full.
-- `TIMEOUT`: wait for the specified duration, then reject.
-- Queue capacity limits waiting tasks, not tasks currently executing.
-- All monitor waits are in `while` loops to handle spurious wakeups and competing producers/consumers.
-
-## Important behaviour and limitations
-
-- Priority only affects tasks that are still queued; it cannot preempt a task already running.
-- FIFO is guaranteed within the same effective priority at the moment a worker selects a task. Aging can change effective priority over time.
-- Aging is evaluated when a worker dequeues; no background scheduler is required.
-- Cancellation remains cooperative for running tasks.
-- No retries/dead-letter queue or percentile metrics yet.
-- This is an educational single-process engine, not a replacement for Java's `ExecutorService`.
-
-## Next milestone
-
-0.5.0: fault tolerance — retries, exponential backoff, task timeouts, and a dead-letter queue.
+- The dead-letter queue is in-memory; entries are lost when the process exits.
+- Retries apply to thrown `Exception`s; fatal JVM `Error`s are not swallowed or retried.
+- Timeout enforcement is cooperative, not thread preemption.
+- Retry backoff occupies the worker that owns the task.
+- This is an educational/concurrency-engineering project, not a production replacement for `ExecutorService`.
