@@ -3,6 +3,7 @@ package core;
 import metrics.MetricsCollector;
 import task.TaskContext;
 import task.TaskHandle;
+import task.TaskStatus;
 
 final class Worker extends Thread {
     private final TaskQueue queue;
@@ -23,30 +24,27 @@ final class Worker extends Thread {
 
             TaskHandle handle = envelope.getHandle();
             if (!handle.tryStart(getName())) {
-                if (handle.getStatus() == task.TaskStatus.CANCELLED) metrics.recordCancelled();
+                if (handle.getStatus() == TaskStatus.CANCELLED) metrics.recordCancelled();
                 continue;
             }
 
             metrics.recordStarted();
             try {
-                envelope.getTask().execute(
-                    new TaskContext(handle.getId(), getName(), handle)
-                );
+                envelope.getTask().execute(new TaskContext(handle.getId(), getName(), handle));
                 handle.markSucceeded();
-                if (handle.getStatus() == task.TaskStatus.SUCCEEDED) {
+                if (handle.getStatus() == TaskStatus.SUCCEEDED) {
                     metrics.recordSuccess(handle.getExecutionNanos(), handle.getQueueWaitNanos());
                 } else {
                     metrics.recordCancelled();
                 }
             } catch (Exception failure) {
                 handle.markFailed(failure);
-                if (handle.getStatus() == task.TaskStatus.FAILED) {
+                if (handle.getStatus() == TaskStatus.FAILED) {
                     metrics.recordFailure(handle.getId(), getName(), failure,
                         handle.getExecutionNanos(), handle.getQueueWaitNanos());
                 } else {
                     metrics.recordCancelled();
                 }
-                // Keep the worker alive after task-level failures.
             } finally {
                 metrics.recordFinished();
             }

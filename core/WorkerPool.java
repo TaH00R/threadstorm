@@ -13,13 +13,9 @@ final class WorkerPool {
         }
     }
 
-    void start() {
-        for (Worker worker : workers) worker.start();
-    }
-
+    void start() { for (Worker worker : workers) worker.start(); }
     void awaitTermination() throws InterruptedException {
         for (Worker worker : workers) worker.join();
     }
-
     int size() { return workers.size(); }
 }

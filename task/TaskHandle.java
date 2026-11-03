@@ -5,14 +5,13 @@ import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-/** A handle through which callers can inspect and cancel a submitted task. */
+/** A handle through which callers can inspect and cancel an accepted task. */
 public final class TaskHandle {
     private final String id;
-    private final Instant submittedAt;
-    private final long submittedNanos;
+    private final Instant submittedAt = Instant.now();
+    private final long submittedNanos = System.nanoTime();
     private final AtomicReference<TaskStatus> status = new AtomicReference<>(TaskStatus.QUEUED);
     private final AtomicBoolean cancellationRequested = new AtomicBoolean(false);
-
     private volatile Instant startedAt;
     private volatile Instant completedAt;
     private volatile long startedNanos;
@@ -20,11 +19,7 @@ public final class TaskHandle {
     private volatile Throwable failure;
     private volatile String workerName;
 
-    public TaskHandle(String id) {
-        this.id = Objects.requireNonNull(id);
-        this.submittedAt = Instant.now();
-        this.submittedNanos = System.nanoTime();
-    }
+    public TaskHandle(String id) { this.id = Objects.requireNonNull(id); }
 
     public String getId() { return id; }
     public TaskStatus getStatus() { return status.get(); }
@@ -47,7 +42,7 @@ public final class TaskHandle {
         return Math.max(0, end - startedNanos);
     }
 
-    /** Queued tasks are cancelled immediately; running tasks receive a cooperative request. */
+    /** Queued tasks are marked cancelled immediately; running tasks receive a cooperative request. */
     public boolean cancel() {
         while (true) {
             TaskStatus current = status.get();
@@ -55,12 +50,11 @@ public final class TaskHandle {
             cancellationRequested.set(true);
             if (current == TaskStatus.QUEUED) {
                 if (status.compareAndSet(TaskStatus.QUEUED, TaskStatus.CANCELLED)) {
-                    completedAt = Instant.now();
-                    completedNanos = System.nanoTime();
+                    finishTimestamps();
                     return true;
                 }
             } else {
-                return true;
+                return true; // Running tasks must cooperate by checking TaskContext.
             }
         }
     }
@@ -74,23 +68,22 @@ public final class TaskHandle {
         this.workerName = workerName;
         this.startedAt = Instant.now();
         this.startedNanos = System.nanoTime();
+        // Close the race where cancellation arrives between the initial check and RUNNING.
+        if (cancellationRequested.get()) {
+            markCancelled();
+            return false;
+        }
         return true;
     }
 
     public void markSucceeded() {
-        if (cancellationRequested.get()) {
-            markCancelled();
-            return;
-        }
+        if (cancellationRequested.get()) { markCancelled(); return; }
         if (status.compareAndSet(TaskStatus.RUNNING, TaskStatus.SUCCEEDED)) finishTimestamps();
     }
 
     public void markFailed(Throwable throwable) {
         Objects.requireNonNull(throwable);
-        if (cancellationRequested.get()) {
-            markCancelled();
-            return;
-        }
+        if (cancellationRequested.get()) { markCancelled(); return; }
         if (status.compareAndSet(TaskStatus.RUNNING, TaskStatus.FAILED)) {
             failure = throwable;
             finishTimestamps();

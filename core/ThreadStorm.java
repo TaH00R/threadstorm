@@ -5,25 +5,27 @@ import task.Task;
 import task.TaskHandle;
 
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** Public facade for the ThreadStorm execution engine. */
+/** Public facade for the ThreadStorm bounded execution engine. */
 public final class ThreadStorm {
     private final Object lifecycleLock = new Object();
     private final TaskQueue queue;
-    private final MetricsCollector metrics;
+    private final MetricsCollector metrics = new MetricsCollector();
     private final WorkerPool workerPool;
     private final AtomicLong taskSequence = new AtomicLong();
     private volatile EngineState state = EngineState.CREATED;
+    private int activeSubmitters;
 
-    public ThreadStorm(int workerCount) {
-        if (workerCount <= 0) {
-            throw new IllegalArgumentException("Worker count must be greater than zero");
-        }
-        queue = new TaskQueue();
-        metrics = new MetricsCollector();
-        workerPool = new WorkerPool(workerCount, queue, metrics);
+    public ThreadStorm(int workerCount, int queueCapacity) {
+        if (workerCount <= 0) throw new IllegalArgumentException("Worker count must be positive");
+        this.queue = new TaskQueue(queueCapacity);
+        this.workerPool = new WorkerPool(workerCount, queue, metrics);
     }
+
+    /** Convenience constructor: a queue capacity of 100 is used. */
+    public ThreadStorm(int workerCount) { this(workerCount, 100); }
 
     public void start() {
         synchronized (lifecycleLock) {
@@ -33,57 +35,98 @@ public final class ThreadStorm {
             state = EngineState.RUNNING;
             workerPool.start();
         }
-        System.out.println("[ThreadStorm] Engine started with " + workerPool.size() + " workers");
+        System.out.println("[ThreadStorm] Started with " + workerPool.size()
+            + " workers; queue capacity=" + queue.getCapacity());
+    }
+
+    /** Default submission policy is BLOCK: wait until queue capacity is available. */
+    public TaskHandle submit(Task task) throws InterruptedException {
+        return submit(task, SubmissionPolicy.BLOCK, 0, TimeUnit.NANOSECONDS);
+    }
+
+    public TaskHandle submit(Task task, SubmissionPolicy policy) throws InterruptedException {
+        return submit(task, policy, 0, TimeUnit.NANOSECONDS);
+    }
+
+    public TaskHandle submit(Task task, SubmissionPolicy policy, long timeout, TimeUnit unit)
+            throws InterruptedException {
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(policy, "policy");
+        Objects.requireNonNull(unit, "unit");
+
+        synchronized (lifecycleLock) {
+            if (state != EngineState.RUNNING) {
+                throw new IllegalStateException("Engine is not accepting tasks; state=" + state);
+            }
+            activeSubmitters++;
+        }
+
+        TaskHandle handle = new TaskHandle(String.format("TASK-%06d", taskSequence.incrementAndGet()));
+        boolean accepted = false;
+        try {
+            queue.submit(new TaskEnvelope(task, handle), policy, timeout, unit);
+            accepted = true;
+            metrics.recordSubmitted();
+            return handle;
+        } finally {
+            synchronized (lifecycleLock) {
+                if (accepted) {
+                    // Metrics are recorded before this decrement, so shutdown cannot report early.
+                }
+                activeSubmitters--;
+                lifecycleLock.notifyAll();
+            }
+        }
     }
 
     /**
-     * Submissions and the transition to SHUTTING_DOWN share the same lock.
-     * Therefore a submission is either accepted before shutdown or rejected after it.
+     * Stop accepting new work, allow already-started submit calls to finish admission,
+     * then close the queue and drain all accepted tasks.
      */
-    public TaskHandle submit(Task task) {
-        Objects.requireNonNull(task, "task");
-        synchronized (lifecycleLock) {
-            if (state != EngineState.RUNNING) {
-                throw new IllegalStateException("Engine is not accepting tasks; current state: " + state);
-            }
-            String id = String.format("TASK-%06d", taskSequence.incrementAndGet());
-            TaskHandle handle = new TaskHandle(id);
-            queue.submit(new TaskEnvelope(task, handle));
-            metrics.recordSubmitted();
-            return handle;
-        }
-    }
-
-    /** Stops accepting submissions, drains accepted tasks, and waits for all workers. */
     public void shutdown() {
+        boolean interrupted = false;
         synchronized (lifecycleLock) {
             if (state == EngineState.TERMINATED) return;
+
+            if (state == EngineState.SHUTTING_DOWN) {
+                // Another caller owns shutdown. Wait for it instead of joining workers
+                // before the owner has closed the queue.
+                while (state != EngineState.TERMINATED) {
+                    try { lifecycleLock.wait(); }
+                    catch (InterruptedException e) { interrupted = true; }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+                return;
+            }
+
             if (state == EngineState.CREATED) {
                 state = EngineState.TERMINATED;
                 queue.shutdown();
-                System.out.println("[ThreadStorm] Engine terminated before start");
+                lifecycleLock.notifyAll();
+                System.out.println("[ThreadStorm] Terminated before start");
                 metrics.displayReport();
                 return;
             }
-            if (state == EngineState.RUNNING) {
-                state = EngineState.SHUTTING_DOWN;
-                queue.shutdown();
+
+            state = EngineState.SHUTTING_DOWN;
+            while (activeSubmitters > 0) {
+                try { lifecycleLock.wait(); }
+                catch (InterruptedException e) { interrupted = true; }
             }
+            queue.shutdown();
         }
 
-        boolean interrupted = false;
         for (;;) {
             try {
                 workerPool.awaitTermination();
                 break;
             } catch (InterruptedException e) {
-                // Complete graceful shutdown even if the caller is interrupted.
                 interrupted = true;
             }
         }
-
         synchronized (lifecycleLock) {
             state = EngineState.TERMINATED;
+            lifecycleLock.notifyAll();
         }
         System.out.println("[ThreadStorm] All workers terminated");
         metrics.displayReport();
@@ -92,5 +135,6 @@ public final class ThreadStorm {
 
     public EngineState getState() { return state; }
     public int getQueueSize() { return queue.size(); }
+    public int getQueueCapacity() { return queue.getCapacity(); }
     public MetricsCollector getMetrics() { return metrics; }
 }

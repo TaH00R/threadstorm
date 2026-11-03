@@ -13,11 +13,11 @@ public final class ComputationTask implements Task {
     @Override
     public void execute(TaskContext context) {
         BigInteger result = BigInteger.ONE;
-        for (int i = 1; i <= number; i++) {
-            context.throwIfCancellationRequested();
+        for (int i = 2; i <= number; i++) {
+            if ((i & 1023) == 0) context.throwIfCancellationRequested();
             result = result.multiply(BigInteger.valueOf(i));
         }
-        System.out.printf("[%s] %s factorial(%d) = %s%n",
-            context.getWorkerName(), context.getTaskId(), number, result);
+        System.out.printf("[%s] %s factorial(%d) calculated (%d digits)%n",
+            context.getWorkerName(), context.getTaskId(), number, result.toString().length());
     }
 }

@@ -14,7 +14,6 @@ public final class SimulationTask implements Task {
     public void execute(TaskContext context) throws InterruptedException {
         System.out.printf("[%s] %s started: %s%n",
             context.getWorkerName(), context.getTaskId(), taskName);
-
         long remainingNanos = durationMillis * 1_000_000L;
         long deadline = System.nanoTime() + remainingNanos;
         while (remainingNanos > 0) {
@@ -24,7 +23,6 @@ public final class SimulationTask implements Task {
             Thread.sleep(millis, nanos);
             remainingNanos = deadline - System.nanoTime();
         }
-
         context.throwIfCancellationRequested();
         System.out.printf("[%s] %s completed: %s%n",
             context.getWorkerName(), context.getTaskId(), taskName);
