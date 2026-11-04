@@ -1,96 +1,89 @@
-# ThreadStorm 0.7.0
+# ThreadStorm 0.8.0 — Benchmarking & Performance Analysis
 
-ThreadStorm is a Java task-execution engine built to explore worker pools, monitor-based queues, scheduling, lifecycle management, backpressure, fault tolerance and runtime observability.
+ThreadStorm is a Java concurrent task execution engine with a terminal-native monitoring interface. Version 0.8.0 adds a dependency-free comparative benchmark harness while preserving the 0.7.1 TUI and engine features.
 
-## What's new in 0.7.0 — Terminal Dashboard
+## Requirements
 
-A dependency-free ANSI terminal dashboard now lets you inspect and exercise the running engine:
+- Java 17 or later
+- Windows PowerShell, macOS Terminal, or Linux terminal
+- No third-party dependencies
 
-- `submit <message> [priority]` submits a task (uses REJECT when the bounded queue is full).
-- `demo` submits eight sample tasks.
-- `workers` displays worker state, current task and utilization.
-- `queue` displays queue depth and capacity.
-- `metrics` displays counters, throughput and latency percentiles.
-- `failures` and `deadletters` inspect failure information.
-- `timeline [count]` displays recent bounded event history.
-- `quit` gracefully drains accepted work and exits.
+## Compile the project
 
-The TUI is an adapter over the public `ThreadStorm` API. It does not access or mutate the internal queue, worker threads or metrics state directly. The core engine remains usable without the CLI.
-
-## Project layout
-
-```text
-threadstorm-0.7.0/
-├── cli/ThreadStormCli.java
-├── core/
-├── metrics/
-├── task/
-├── tests/
-├── Main.java
-└── README.md
-```
-
-## Build and run (Java 17+)
-
-From the project root in PowerShell:
+From the project root:
 
 ```powershell
-javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java cli\*.java
+javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java cli\*.java benchmarks\*.java
+```
+
+## Launch the terminal dashboard
+
+```powershell
 java -cp out Main --workers 4 --capacity 32
 ```
 
-Disable ANSI color when using a terminal that does not support it:
+Disable ANSI colors if your terminal does not support them:
 
 ```powershell
 java -cp out Main --workers 4 --capacity 32 --no-color
 ```
 
-## TUI actions
+## Run the benchmark suite
 
-```text
-help
-submit hello from ThreadStorm HIGH
-demo
-workers
-queue
-metrics
-failures
-deadletters
-timeline 30
-shutdown
-```
+The benchmark compares three implementations using the same deterministic CPU-bound task workload:
 
-Priorities: `CRITICAL`, `HIGH`, `NORMAL`, `LOW`. `submit` uses the queue's non-blocking `REJECT` policy so the console remains responsive instead of hanging while the queue is full. The command reports a rejection as an error; it does not silently drop work.
-
-## Run tests
-
-Compile the project first, then:
+1. Sequential execution
+2. A fixed-size `ExecutorService`
+3. ThreadStorm
 
 ```powershell
-javac -Xlint:all -cp out -d out tests\PrioritySchedulingTest.java tests\FaultToleranceTest.java tests\ThreadStormStressTest.java tests\ObservabilityTest.java
-java -cp out tests.PrioritySchedulingTest
-java -cp out tests.FaultToleranceTest
-java -cp out ThreadStormStressTest
-java -cp out tests.ObservabilityTest
+java -cp out benchmarks.BenchmarkRunner --tasks 2000 --work 20000 --workers 4 --warmups 1 --runs 3 --csv benchmark-results.csv
 ```
 
-## Existing capabilities
+Options:
 
-- Fixed worker pool and monitor-based task queue.
-- Bounded queue with BLOCK, REJECT and TIMEOUT submission policies.
-- Priority scheduling with FIFO ordering within equal priority and priority aging.
-- Task lifecycle, cooperative cancellation and graceful shutdown.
-- Configurable retries, exponential backoff, dead-letter queue and cooperative execution timeouts.
-- Worker snapshots, execution and queue-wait percentiles, throughput and bounded event timeline.
+| Option | Default | Meaning |
+|---|---:|---|
+| `--tasks` | 2000 | Number of tasks per measured run |
+| `--work` | 20000 | CPU mixing iterations per task |
+| `--workers` | Available processors (minimum 2) | Worker count for pooled implementations |
+| `--warmups` | 1 | Warm-up rounds, excluded from reported results |
+| `--runs` | 3 | Measured repetitions |
+| `--csv` | benchmark-results.csv | Output CSV path |
 
-## Metric semantics and design boundaries
+The harness reports elapsed time and throughput (tasks/second), then writes each measured run to CSV. The benchmark uses the same workload function for all three implementations and consumes results through a checksum to reduce dead-code elimination risk.
 
-- Execution timeouts are cooperative. Tasks must periodically call `context.checkpoint()`; Java cannot safely force-stop arbitrary task code.
-- Retry backoff occupies the worker that owns the task. This avoids re-enqueue deadlocks with a bounded queue, at the cost of worker availability during backoff.
-- The dead-letter queue and metrics are in-memory and reset when the process exits.
-- Percentiles are nearest-rank calculations over a bounded retained sample window, not statistically lossless histograms.
-- Worker utilization is an in-process busy/idle estimate, not operating-system CPU utilization.
-- The TUI is intentionally a local interactive adapter, not a network service or remote-control protocol.
-- ThreadStorm is an educational concurrency-engineering project, not a production replacement for `ExecutorService`.
+## Important benchmarking caveats
 
+This is a **comparative application-level harness**, not a statistically rigorous microbenchmark suite. It is useful for repeatable local experiments and identifying performance characteristics, but results depend on CPU, JVM version, garbage collection, OS scheduling, thermal state, and workload size. For publication-quality JVM microbenchmarks, add JMH with forks, warm-up iterations, measurement iterations, and profilers. Do not claim ThreadStorm is faster than `ExecutorService` unless repeated measurements on documented hardware support that claim.
 
+The benchmark intentionally includes each framework's submission and coordination overhead because it measures end-to-end task execution through each API. ThreadStorm's startup/shutdown and task-handle checks are also part of its measured path; document this when comparing results.
+
+## Existing test programs
+
+Compile all project sources and tests:
+
+```powershell
+javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java cli\*.java benchmarks\*.java tests\*.java
+```
+
+Run the existing tests individually:
+
+```powershell
+java -cp out tests.PrioritySchedulingTest
+java -cp out tests.FaultToleranceTest
+java -cp out tests.ObservabilityTest
+java -cp out tests.ThreadStormStressTest
+java -cp out tests.BenchmarkSmokeTest
+```
+
+## Architecture
+
+- `core/` — execution engine, queue, workers, scheduling and lifecycle
+- `task/` — task contracts, handles, context and lifecycle states
+- `metrics/` — bounded metrics, worker snapshots and event data
+- `cli/` — terminal dashboard and command-line interface
+- `benchmarks/` — comparative benchmark harness and CSV reporting
+- `tests/` — standalone test programs
+
+The TUI remains a terminal application. There is no web dashboard and the UI does not directly mutate internal worker or queue state.
