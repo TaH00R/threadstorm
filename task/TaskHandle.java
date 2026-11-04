@@ -2,6 +2,8 @@ package task;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -12,6 +14,8 @@ public final class TaskHandle {
     private final long submittedNanos = System.nanoTime();
     private final AtomicReference<TaskStatus> status = new AtomicReference<>(TaskStatus.QUEUED);
     private final AtomicBoolean cancellationRequested = new AtomicBoolean(false);
+    private final AtomicBoolean completionSignalled = new AtomicBoolean(false);
+    private final CompletableFuture<TaskStatus> completion = new CompletableFuture<>();
     private volatile Instant startedAt;
     private volatile Instant completedAt;
     private volatile long startedNanos;
@@ -32,6 +36,23 @@ public final class TaskHandle {
     public int getAttempts() { return attempts; }
     public boolean isCancellationRequested() { return cancellationRequested.get(); }
     public boolean isDone() { return getStatus().isTerminal(); }
+
+    /** Completes exactly once when this logical task reaches a terminal state. */
+    public CompletionStage<TaskStatus> completion() { return completion.minimalCompletionStage(); }
+
+    /** Blocks until the task reaches SUCCEEDED, FAILED, or CANCELLED. */
+    public TaskStatus await() throws InterruptedException {
+        try { return completion.get(); }
+        catch (java.util.concurrent.ExecutionException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    /** Blocks up to the supplied duration; returns null if the timeout expires. */
+    public TaskStatus await(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
+        Objects.requireNonNull(unit, "unit");
+        try { return completion.get(timeout, unit); }
+        catch (java.util.concurrent.TimeoutException timeoutException) { return null; }
+        catch (java.util.concurrent.ExecutionException impossible) { throw new IllegalStateException(impossible); }
+    }
 
     public long getQueueWaitNanos() {
         long end = startedNanos == 0 ? System.nanoTime() : startedNanos;
@@ -114,5 +135,6 @@ public final class TaskHandle {
     private void finishTimestamps() {
         completedAt = Instant.now();
         completedNanos = System.nanoTime();
+        if (completionSignalled.compareAndSet(false, true)) completion.complete(status.get());
     }
 }

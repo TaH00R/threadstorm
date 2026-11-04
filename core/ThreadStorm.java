@@ -3,8 +3,13 @@ package core;
 import metrics.MetricsCollector;
 import task.Task;
 import task.TaskHandle;
+import task.TaskGroup;
+import task.TaskStatus;
 
 import java.util.Objects;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -147,6 +152,36 @@ public final class ThreadStorm {
         } finally {
             synchronized (lifecycleLock) { activeSubmitters--; lifecycleLock.notifyAll(); }
         }
+    }
+
+    /** Creates a named group for coordinating a related set of tasks. */
+    public TaskGroup createTaskGroup(String name) { return new TaskGroup(name, this); }
+
+    /**
+     * Submits a task only after all dependencies have completed successfully.
+     * Dependency waiting happens through completion stages, never by occupying a worker.
+     */
+    public CompletableFuture<TaskHandle> submitAfter(List<TaskHandle> dependencies, Task task, Priority priority) {
+        Objects.requireNonNull(dependencies, "dependencies");
+        Objects.requireNonNull(task, "task");
+        Objects.requireNonNull(priority, "priority");
+        List<TaskHandle> copy = List.copyOf(dependencies);
+        CompletableFuture<?>[] completions = copy.stream()
+            .map(handle -> handle.completion().toCompletableFuture())
+            .toArray(CompletableFuture[]::new);
+        return CompletableFuture.allOf(completions).thenApplyAsync(ignored -> {
+            for (TaskHandle dependency : copy) {
+                if (dependency.getStatus() != TaskStatus.SUCCEEDED) {
+                    throw new CompletionException(new IllegalStateException(
+                        "Dependency " + dependency.getId() + " finished as " + dependency.getStatus()));
+                }
+            }
+            try { return submit(task, priority); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CompletionException(interrupted);
+            }
+        });
     }
 
     public DeadLetterQueue getDeadLetterQueue() { return deadLetters; }

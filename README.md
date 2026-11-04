@@ -1,6 +1,6 @@
-# ThreadStorm 0.8.0 — Benchmarking & Performance Analysis
+# ThreadStorm 0.9.0 — Task Groups & Dependency Coordination
 
-ThreadStorm is a Java concurrent task execution engine with a terminal-native monitoring interface. Version 0.8.0 adds a dependency-free comparative benchmark harness while preserving the 0.7.1 TUI and engine features.
+ThreadStorm is a Java concurrent task execution engine with a terminal-native monitoring interface. Version 0.9.0 adds task groups, terminal completion signals, and success-gated dependency submission while preserving the terminal-native interface, benchmark harness, and engine features.
 
 ## Requirements
 
@@ -73,8 +73,9 @@ Run the existing tests individually:
 java -cp out tests.PrioritySchedulingTest
 java -cp out tests.FaultToleranceTest
 java -cp out tests.ObservabilityTest
-java -cp out tests.ThreadStormStressTest
+java -cp out ThreadStormStressTest
 java -cp out tests.BenchmarkSmokeTest
+java -cp out tests.TaskCoordinationTest
 ```
 
 ## Architecture
@@ -87,3 +88,37 @@ java -cp out tests.BenchmarkSmokeTest
 - `tests/` — standalone test programs
 
 The TUI remains a terminal application. There is no web dashboard and the UI does not directly mutate internal worker or queue state.
+
+## 0.9.0 — Task coordination
+
+This release adds task groups and dependency-aware submission:
+
+- `TaskGroup` groups related handles, supports group-wide cancellation, status counts, and bounded/unbounded waiting.
+- `TaskHandle.await()` and `completion()` expose terminal completion without polling.
+- `ThreadStorm.submitAfter(...)` dispatches a task only after all dependencies succeed. Dependency waiting is callback-based and does not occupy a worker thread.
+- If a dependency fails or is cancelled, the dependent submission completes exceptionally and is not admitted to the engine.
+
+Example:
+
+```java
+TaskGroup group = engine.createTaskGroup("import-pipeline");
+TaskHandle download = group.submit(ctx -> downloadData());
+TaskHandle validate = group.submit(ctx -> validateData());
+
+TaskHandle publish = engine.submitAfter(
+    List.of(download, validate),
+    ctx -> publishResults(),
+    Priority.HIGH
+).get();
+
+publish.await();
+```
+
+The current dependency API is success-gated, not a general DAG scheduler. It does not yet provide work stealing or dynamic worker scaling; those remain future scheduling experiments.
+
+### Coordination test
+
+```powershell
+javac -cp out -d out tests\\TaskCoordinationTest.java
+java -cp out tests.TaskCoordinationTest
+```

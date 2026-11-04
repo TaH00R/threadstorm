@@ -15,7 +15,7 @@ import java.util.Locale;
 import java.util.Scanner;
 import java.util.concurrent.TimeUnit;
 
-/** Dependency-free, ANSI terminal dashboard for ThreadStorm. */
+    /** Dependency-free, ANSI terminal dashboard for ThreadStorm. */
 public final class ThreadStormTui {
     private static final String RESET = "\u001B[0m";
     private static final String BOLD = "1";
