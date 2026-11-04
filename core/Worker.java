@@ -11,12 +11,13 @@ final class Worker extends Thread {
     private final TaskQueue queue;
     private final MetricsCollector metrics;
     private final DeadLetterQueue deadLetters;
-    Worker(String name, TaskQueue queue, MetricsCollector metrics, DeadLetterQueue deadLetters) {
-        super(name); this.queue = queue; this.metrics = metrics; this.deadLetters = deadLetters;
+    private final boolean quiet;
+    Worker(String name, TaskQueue queue, MetricsCollector metrics, DeadLetterQueue deadLetters, boolean quiet) {
+        super(name); this.queue = queue; this.metrics = metrics; this.deadLetters = deadLetters; this.quiet = quiet;
     }
     @Override public void run() {
         metrics.registerWorker(getName());
-        System.out.println("[" + getName() + "] Started");
+        if (!quiet) System.out.println("[" + getName() + "] Started");
         while (!isInterrupted()) {
             metrics.workerIdle(getName());
             TaskEnvelope envelope = queue.take();
@@ -47,7 +48,7 @@ final class Worker extends Thread {
                         retry++;
                         long delay = envelope.getRetryPolicy().backoffMillisForRetry(retry);
                         metrics.recordRetry(handle.getId(), getName(), retry, delay);
-                        System.out.println("[" + getName() + "] Retry " + retry + "/" + envelope.getRetryPolicy().getMaxRetries() + " for " + handle.getId() + " after " + delay + " ms");
+                        if (!quiet) System.out.println("[" + getName() + "] Retry " + retry + "/" + envelope.getRetryPolicy().getMaxRetries() + " for " + handle.getId() + " after " + delay + " ms");
                         if (!handle.prepareRetry()) { finalFailure = null; break; }
                         try { Thread.sleep(delay); }
                         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); handle.markCancelled(); finalFailure = null; break; }
@@ -69,6 +70,6 @@ final class Worker extends Thread {
             }
         }
         metrics.workerStopped(getName());
-        System.out.println("[" + getName() + "] Stopped");
+        if (!quiet) System.out.println("[" + getName() + "] Stopped");
     }
 }

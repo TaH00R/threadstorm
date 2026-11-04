@@ -7,9 +7,9 @@ import java.util.List;
 final class WorkerPool {
     private final List<Worker> workers = new ArrayList<>();
 
-    WorkerPool(int workerCount, TaskQueue queue, MetricsCollector metrics, DeadLetterQueue deadLetters) {
+    WorkerPool(int workerCount, TaskQueue queue, MetricsCollector metrics, DeadLetterQueue deadLetters, boolean quiet) {
         for (int i = 1; i <= workerCount; i++) {
-            workers.add(new Worker("Worker-" + i, queue, metrics, deadLetters));
+            workers.add(new Worker("Worker-" + i, queue, metrics, deadLetters, quiet));
         }
     }
 

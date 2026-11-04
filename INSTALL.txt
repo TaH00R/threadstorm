@@ -1,0 +1,26 @@
+ThreadStorm terminal repair patch
+================================
+This patch was built against the ThreadStorm ZIP shared in this conversation.
+
+CONTENTS
+  cli/TerminalInput.java    inherited Windows console input and visible reader errors
+  cli/TerminalSize.java     smaller fallback terminal dimensions
+  cli/ThreadStormTui.java  explicit UTF-8 output, Windows ASCII-safe default,
+                           --ascii / --unicode modes, narrow dashboard layout
+  run.ps1                  build/run launcher with UTF-8 console code page
+
+INSTALL
+1. Back up your existing cli/ files and run.ps1.
+2. Copy the contents of this ZIP into D:\threadstorm, preserving the cli folder.
+3. In Windows Terminal, run:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\threadstorm\run.ps1 -Dashboard
+
+Windows uses ASCII-safe rendering by default to prevent mojibake and unsupported glyphs.
+If your terminal supports Unicode correctly, opt into it with:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\threadstorm\run.ps1 -Dashboard --unicode
+You can always force ASCII with --ascii.
+Do not add -NoBuild on the first run after replacing files.
+
+STATUS
+Built with JDK 21 --release 17. All bundled tests ran successfully on Linux.
+Windows-specific interactive input has not been validated on Windows.

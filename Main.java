@@ -1,3 +1,4 @@
+/** ThreadStorm terminal dashboard entry point. */
 public final class Main {
     private Main() { }
 

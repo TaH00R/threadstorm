@@ -36,7 +36,7 @@ public final class BenchmarkRunner {
             throw new IllegalArgumentException("tasks/workers/work/runs must be positive; warmups cannot be negative");
         }
 
-        System.out.println("ThreadStorm Benchmark Suite 0.8.0");
+        System.out.println("ThreadStorm Benchmark Suite 1.0.0");
         System.out.println("Started: " + Instant.now());
         System.out.printf(Locale.ROOT, "JVM: %s | processors: %d | tasks: %d | work/task: %d | workers: %d%n",
                 System.getProperty("java.version"), Runtime.getRuntime().availableProcessors(), tasks, work, workers);

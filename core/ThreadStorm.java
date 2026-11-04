@@ -21,17 +21,22 @@ public final class ThreadStorm {
     private final DeadLetterQueue deadLetters = new DeadLetterQueue();
     private final WorkerPool workerPool;
     private final AtomicLong taskSequence = new AtomicLong();
+    private final boolean quiet;
     private volatile EngineState state = EngineState.CREATED;
     private int activeSubmitters;
 
-    public ThreadStorm(int workerCount, int queueCapacity) {
+    public ThreadStorm(int workerCount, int queueCapacity) { this(workerCount, queueCapacity, false); }
+
+    /** Creates an engine with optional console logging suppression for embedded UIs. */
+    public ThreadStorm(int workerCount, int queueCapacity, boolean quiet) {
         if (workerCount <= 0) throw new IllegalArgumentException("Worker count must be positive");
+        this.quiet = quiet;
         this.queue = new TaskQueue(queueCapacity);
-        this.workerPool = new WorkerPool(workerCount, queue, metrics, deadLetters);
+        this.workerPool = new WorkerPool(workerCount, queue, metrics, deadLetters, quiet);
     }
 
     /** Convenience constructor: a queue capacity of 100 is used. */
-    public ThreadStorm(int workerCount) { this(workerCount, 100); }
+    public ThreadStorm(int workerCount) { this(workerCount, 100, false); }
 
     public void start() {
         synchronized (lifecycleLock) {
@@ -41,7 +46,7 @@ public final class ThreadStorm {
             state = EngineState.RUNNING;
             workerPool.start();
         }
-        System.out.println("[ThreadStorm] Started with " + workerPool.size()
+        if (!quiet) System.out.println("[ThreadStorm] Started with " + workerPool.size()
             + " workers; queue capacity=" + queue.getCapacity());
     }
 
@@ -106,8 +111,7 @@ public final class ThreadStorm {
                 state = EngineState.TERMINATED;
                 queue.shutdown();
                 lifecycleLock.notifyAll();
-                System.out.println("[ThreadStorm] Terminated before start");
-                metrics.displayReport();
+                if (!quiet) { System.out.println("[ThreadStorm] Terminated before start"); metrics.displayReport(); }
                 return;
             }
 
@@ -131,8 +135,7 @@ public final class ThreadStorm {
             state = EngineState.TERMINATED;
             lifecycleLock.notifyAll();
         }
-        System.out.println("[ThreadStorm] All workers terminated");
-        metrics.displayReport();
+        if (!quiet) { System.out.println("[ThreadStorm] All workers terminated"); metrics.displayReport(); }
         if (interrupted) Thread.currentThread().interrupt();
     }
 

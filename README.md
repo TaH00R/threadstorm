@@ -1,124 +1,73 @@
-# ThreadStorm 0.9.0 — Task Groups & Dependency Coordination
+# ThreadStorm
 
-ThreadStorm is a Java concurrent task execution engine with a terminal-native monitoring interface. Version 0.9.0 adds task groups, terminal completion signals, and success-gated dependency submission while preserving the terminal-native interface, benchmark harness, and engine features.
+ThreadStorm is a Java 17+ learning project that runs tasks on a custom pool of worker threads and shows what happens while they execute. It includes a bounded priority queue, cancellation, retries, graceful shutdown, live metrics, and a terminal dashboard.
 
-## Requirements
+It's a custom execution engine for learning about Java concurrency, not a replacement for Java's `ExecutorService` or a production task system.
 
-- Java 17 or later
-- Windows PowerShell, macOS Terminal, or Linux terminal
-- No third-party dependencies
+## Quick start
 
-## Compile the project
+Install a **JDK 17+** (`java -version` and `javac -version` should both work).
 
-From the project root:
+**Windows — PowerShell 5.1/7 or Windows Terminal:**
 
 ```powershell
-javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java cli\*.java benchmarks\*.java
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
-## Launch the terminal dashboard
+**Windows — Command Prompt (cmd.exe):**
+
+```bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File run.ps1
+```
+
+**Linux/macOS — Bash, Zsh, or another POSIX shell:**
+
+```sh
+./run.sh
+```
+
+The launcher builds and opens the dashboard. On Windows, `run.ps1` selects the same JDK for compilation and execution, avoiding old Java runtime conflicts.
+
+### Using the dashboard
+
+On **Linux/macOS terminals**, keys work immediately when raw input is available. On **Windows and terminals without raw input**, **type the key and press Enter**. This is intentional: it avoids external PowerShell keyboard readers and works across shells. Line mode refreshes when you enter a command to avoid corrupting text as you type.
+
+| Action | Key / command |
+|---|---|
+| Switch pages | `1` to `7` |
+| Run demo tasks | `d` |
+| Submit task | `s`, then type its description |
+| Navigate | `up`, `down` (arrow keys in raw mode) |
+| Help | `?` |
+| Quit | `q`, then `y` |
+| Close an overlay | `esc` (Escape in raw mode) |
+
+**Windows example:** type `d` and press **Enter** to submit demonstration tasks. To submit your own task, type `s` + **Enter**, then your task description + **Enter**.
+
+### Options
 
 ```powershell
-java -cp out Main --workers 4 --capacity 32
+.\run.ps1 -Dashboard --workers 4 --capacity 128
+.\run.ps1 -Cli              # simpler text interface
+.\run.ps1 -Test             # run the engine and terminal-input tests
+.\run.ps1 -NoBuild          # reuse compiled classes
 ```
 
-Disable ANSI colors if your terminal does not support them:
+On Linux/macOS you can use `./run.sh --workers 4 --capacity 128`. If drawing characters look wrong, add `--ascii` or `--no-color`.
 
-```powershell
-java -cp out Main --workers 4 --capacity 32 --no-color
-```
+PowerShell script policy blocking local scripts? The first Windows command above uses a one-time execution-policy override. It does not permanently change your machine's setting.
 
-## Run the benchmark suite
+## What's inside?
 
-The benchmark compares three implementations using the same deterministic CPU-bound task workload:
+- `core/` — workers, queue, priorities, lifecycle, and retry handling
+- `task/` — tasks, handles, cancellation, and task groups
+- `metrics/` — execution statistics, worker states, and events
+- `cli/` — dashboard, keyboard input, and text CLI
+- `benchmarks/` — local comparison with sequential and `ExecutorService` execution
+- `tests/` — engine and integration tests
 
-1. Sequential execution
-2. A fixed-size `ExecutorService`
-3. ThreadStorm
+## Testing and limitations
 
-```powershell
-java -cp out benchmarks.BenchmarkRunner --tasks 2000 --work 20000 --workers 4 --warmups 1 --runs 3 --csv benchmark-results.csv
-```
+Run `./test.sh` on Linux/macOS or `./run.ps1 -Test` on Windows. Benchmarks can be run with `java -cp out benchmarks.BenchmarkRunner` after building.
 
-Options:
-
-| Option | Default | Meaning |
-|---|---:|---|
-| `--tasks` | 2000 | Number of tasks per measured run |
-| `--work` | 20000 | CPU mixing iterations per task |
-| `--workers` | Available processors (minimum 2) | Worker count for pooled implementations |
-| `--warmups` | 1 | Warm-up rounds, excluded from reported results |
-| `--runs` | 3 | Measured repetitions |
-| `--csv` | benchmark-results.csv | Output CSV path |
-
-The harness reports elapsed time and throughput (tasks/second), then writes each measured run to CSV. The benchmark uses the same workload function for all three implementations and consumes results through a checksum to reduce dead-code elimination risk.
-
-## Important benchmarking caveats
-
-This is a **comparative application-level harness**, not a statistically rigorous microbenchmark suite. It is useful for repeatable local experiments and identifying performance characteristics, but results depend on CPU, JVM version, garbage collection, OS scheduling, thermal state, and workload size. For publication-quality JVM microbenchmarks, add JMH with forks, warm-up iterations, measurement iterations, and profilers. Do not claim ThreadStorm is faster than `ExecutorService` unless repeated measurements on documented hardware support that claim.
-
-The benchmark intentionally includes each framework's submission and coordination overhead because it measures end-to-end task execution through each API. ThreadStorm's startup/shutdown and task-handle checks are also part of its measured path; document this when comparing results.
-
-## Existing test programs
-
-Compile all project sources and tests:
-
-```powershell
-javac -Xlint:all -d out Main.java core\*.java task\*.java metrics\*.java cli\*.java benchmarks\*.java tests\*.java
-```
-
-Run the existing tests individually:
-
-```powershell
-java -cp out tests.PrioritySchedulingTest
-java -cp out tests.FaultToleranceTest
-java -cp out tests.ObservabilityTest
-java -cp out ThreadStormStressTest
-java -cp out tests.BenchmarkSmokeTest
-java -cp out tests.TaskCoordinationTest
-```
-
-## Architecture
-
-- `core/` — execution engine, queue, workers, scheduling and lifecycle
-- `task/` — task contracts, handles, context and lifecycle states
-- `metrics/` — bounded metrics, worker snapshots and event data
-- `cli/` — terminal dashboard and command-line interface
-- `benchmarks/` — comparative benchmark harness and CSV reporting
-- `tests/` — standalone test programs
-
-The TUI remains a terminal application. There is no web dashboard and the UI does not directly mutate internal worker or queue state.
-
-## 0.9.0 — Task coordination
-
-This release adds task groups and dependency-aware submission:
-
-- `TaskGroup` groups related handles, supports group-wide cancellation, status counts, and bounded/unbounded waiting.
-- `TaskHandle.await()` and `completion()` expose terminal completion without polling.
-- `ThreadStorm.submitAfter(...)` dispatches a task only after all dependencies succeed. Dependency waiting is callback-based and does not occupy a worker thread.
-- If a dependency fails or is cancelled, the dependent submission completes exceptionally and is not admitted to the engine.
-
-Example:
-
-```java
-TaskGroup group = engine.createTaskGroup("import-pipeline");
-TaskHandle download = group.submit(ctx -> downloadData());
-TaskHandle validate = group.submit(ctx -> validateData());
-
-TaskHandle publish = engine.submitAfter(
-    List.of(download, validate),
-    ctx -> publishResults(),
-    Priority.HIGH
-).get();
-
-publish.await();
-```
-
-The current dependency API is success-gated, not a general DAG scheduler. It does not yet provide work stealing or dynamic worker scaling; those remain future scheduling experiments.
-
-### Coordination test
-
-```powershell
-javac -cp out -d out tests\\TaskCoordinationTest.java
-java -cp out tests.TaskCoordinationTest
-```
+The dashboard needs an interactive **ANSI/VT-capable terminal**. Not every IDE output panel supports full-screen terminal control; use the text CLI with `-Cli` in those environments. Windows uses Enter-based controls rather than instant single-key capture; native single-key handling would require a dedicated cross-platform terminal library. This project has no external Java dependencies.
